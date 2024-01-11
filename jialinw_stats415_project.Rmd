@@ -9,11 +9,6 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# Notes  
-1.Question posed should make sense for the data.  
-2.At least 3 methods should be compared to generate the best model, and the methods we use should match the questions and be appropriate for the dataset.  
-3.Correct and completed: EDA, 3 model at least, tuning parameter, relavent plot.  
-4.Conclusion and interpretation.  
 
 # 1. Data Preparation  
 
