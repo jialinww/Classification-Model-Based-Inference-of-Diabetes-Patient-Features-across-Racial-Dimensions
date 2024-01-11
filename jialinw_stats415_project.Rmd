@@ -1,0 +1,1433 @@
+---
+title: "jialinw_stats415_project"
+author: "jialinw"
+date: "2023-04-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Notes  
+1.Question posed should make sense for the data.  
+2.At least 3 methods should be compared to generate the best model, and the methods we use should match the questions and be appropriate for the dataset.  
+3.Correct and completed: EDA, 3 model at least, tuning parameter, relavent plot.  
+4.Conclusion and interpretation.  
+
+# 1. Data Preparation  
+
+## 1.1 Package Initialization  
+```{r install_package, eval=FALSE}
+install.packages("haven")
+install.packages("dplyr")
+install.packages("randomForest")
+install.packages("e1071")
+install.packages("caret")
+install.packages("pROC")
+install.packages("ggplot2")
+install.packages("smotefamily")
+install.packages("MASS")
+```
+
+## 1.2 Importing Data   
+
+```{r}
+library(haven)
+library(dplyr)
+
+# SEQN, Gender, Age, Race, Education, Martial status, Asset level
+demo1 <- read_xpt("P_DEMO.XPT")
+demos <- demo1 %>% select(SEQN, RIAGENDR, RIDAGEYR, RIDRETH3,DMDEDUC2,DMDMARTZ,INDFMPIR)
+head(demos)
+
+# SEQN, Prediabetes
+diq1 <- read_xpt("P_DIQ.XPT")
+diqs <- diq1 %>% select(SEQN, DIQ160)
+head(diqs)
+
+# SEQN, Diabetes(Yes:1, No:2)
+y <- diq1 %>% select(SEQN, DIQ010)
+head(y)
+
+# SEQN, Close relative had diabetes
+mcq1 <- read_xpt("P_MCQ.XPT")
+mcqs <- mcq1 %>% select(SEQN, MCQ300C)
+head(mcqs)
+
+#SEQN, Days of active activities involved within a week
+paq1 <- read_xpt("P_PAQ.XPT")
+paqs <- paq1 %>% select(SEQN, PAQ655)
+head(paqs)
+
+#SEQN, Smoked or not
+smq1 <- read_xpt("P_SMQ.XPT")
+smqs <- smq1 %>% select(SEQN, SMQ020)
+head(smqs)
+
+#SEQN, How often drink
+alq1 <- read_xpt("P_ALQ.XPT")
+alqs <- alq1 %>% select(SEQN, ALQ121)
+head(alqs)
+
+#SEQN, Dietary sugar1
+dr1iff1 <- read_xpt("P_DR1IFF.XPT")
+dr1iffs <- dr1iff1 %>% select(SEQN, DR1ISUGR)
+head(dr1iffs)
+
+#SEQN, Dietary sugar2
+dr2iff1 <- read_xpt("P_DR2IFF.XPT")
+dr2iffs <- dr2iff1 %>% select(SEQN, DR2ISUGR)
+head(dr2iffs)
+
+#SEQN, BMI
+bmx1 <- read_xpt("P_BMX.XPT")
+bmxs <- bmx1 %>% select(SEQN, BMXBMI)
+head(bmxs)
+
+#SEQN, 1st_systolic, 2nd_systolic, 3rd_systolic, 1st_diastolic, 2nd_diastolic, 3rd_diastolic  
+bpxo1 <- read_xpt("P_BPXO.XPT")
+bpxos <- bpxo1 %>% select(SEQN, BPXOSY1, BPXOSY2, BPXOSY3, BPXODI1, BPXODI2, BPXODI3)
+head(bpxos)
+
+#SEQN, Fasting Glucose
+glu1 <- read_xpt("P_GLU.XPT")
+glus <- glu1 %>% select(SEQN, LBXGLU)
+head(glus)
+```
+
+## 1.3 Define Preprocessing Function   
+
+```{r}
+# define mode_extract function
+mode_extract <- function(data, var) {
+  mode_value <- data %>%
+    filter(!is.na(!!sym(var))) %>%
+    group_by(!!sym(var)) %>%
+    summarize(count = n()) %>%
+    arrange(desc(count)) %>%
+    top_n(1, count) %>%
+    pull(!!sym(var))
+  return(mode_value)
+}
+# define mode_fill function
+mode_fill <- function(data, var) {
+  mode_value <- mode_extract(data, var)
+  data[is.na(data[[var]]), var] <- mode_value
+  return(data)
+}
+
+# define mean_extract function
+mean_extract <- function(data, var) {
+  mean_value <- data %>%
+    filter(!is.na(!!sym(var))) %>%
+    summarize(mean = mean(!!sym(var), na.rm = TRUE)) %>%
+    pull(mean)
+  return(mean_value)
+}
+# define mean_fill function
+mean_fill <- function(data, var) {
+  mean_value <- mean_extract(data, var)
+  data[is.na(data[[var]]), var] <- mean_value
+  return(data)
+}
+
+# define zero_delete function
+zero_delete <- function(data, var) {
+  for (variable in var){
+    data_filtered <- data[data[[variable]] != 0, ]
+  }
+  return(data_filtered)
+}
+
+# define na_delete function
+na_delete <- function(data, var) {
+  for (variable in var){
+    data_filtered <- data[!is.na(data[[variable]]), ]
+  }
+  return(data_filtered)
+}
+```
+
+## 1.4 Pre-processing   
+
+```{r}
+# Delete the minor data in race 
+demos <- demos[!(demos$RIDRETH3 %in% c(7)), ]
+
+# Fill the missing values in Education
+demos <- mode_fill(demos, "DMDEDUC2")
+
+# Delete the minor data in Education
+demos <- demos[!(demos$DMDEDUC2 %in% c(7, 9)), ]
+
+# Delete the minor noise data (77:Refuse, 99:Don't know)
+demos <- demos[!(demos$DMDMARTZ %in% c(77, 99)), ]
+
+
+# Fill the missing values in Martial status
+demos <- mode_fill(demos, "DMDMARTZ")
+
+# Fill the missing values in Asset level
+demos <- mean_fill(demos, "INDFMPIR")
+
+# Fill the missing values in Prediabetes
+diqs <- mode_fill(diqs, "DIQ160")
+
+# Filter response variable into binary variable
+y <- y %>% filter(DIQ010 %in% c(1, 2))
+
+# Fill the missing values in "Close relative had diabetes"
+mcqs <- mode_fill(mcqs, "MCQ300C")
+
+# Fill the missing values in "Days of active activities involved within a week"
+paqs <- mode_fill(paqs, "PAQ655")
+
+# Fill the missing values in "Smoked or not"
+smqs <- na_delete(smqs, "SMQ020")
+
+# Fill the missing values in "How often drink"
+alqs <- na_delete(alqs, "ALQ121")
+
+# Delete the minor data in "How often drink"
+alqs <- alqs[!(alqs$ALQ121 %in% c(77, 99)), ]
+alqs <- na_delete(alqs, "ALQ121")
+
+# Delete missing values in Dietary sugar1 and Dietary sugar2
+dr1iffs <- na_delete(dr1iffs, "DR1ISUGR")
+dr2iffs <- na_delete(dr2iffs, "DR2ISUGR")
+
+# Combine the data for each person in Dietary sugar1 and Dietary sugar2
+dr1iffs <- dr1iffs %>%
+  group_by(SEQN) %>%
+  summarize_all(funs(mean(., na.rm = TRUE)))
+
+dr1iffs <- dr1iffs %>%
+  group_by(SEQN) %>%
+  summarize_all(funs(mean(., na.rm = TRUE)))
+
+# Combine the data in Dietary sugar1 and Dietary sugar2
+dietary_sugar <- rbind(
+  dr1iffs %>% rename(sugar = DR1ISUGR),
+  dr2iffs %>% rename(sugar = DR2ISUGR)
+)
+sugar <- dietary_sugar %>%
+  group_by(SEQN) %>%
+  summarize(sugar = mean(sugar, na.rm = TRUE))
+
+# Fill BMI missing values using mean value
+bmxs <- mean_fill(bmxs, "BMXBMI")
+
+# Delete missing values in Blood pressure
+bpxos <- na_delete(bpxos, c("BPXOSY1", "BPXOSY2", "BPXOSY3", "BPXODI1", "BPXODI2", "BPXODI3"))
+
+# Average data
+bpxos$avgBPXOSY <- rowMeans(bpxos[, c("BPXOSY1", "BPXOSY2", "BPXOSY3")])
+bpxos$avgBPXODI <- rowMeans(bpxos[, c("BPXODI1", "BPXODI2", "BPXODI3")])
+
+# Use medical metric to calculate the difference
+bpxos$diff_BPXOSY <- bpxos$avgBPXOSY - 130
+bpxos$diff_BPXODI <- bpxos$avgBPXODI - 80
+bpxos <- bpxos %>% select(SEQN, diff_BPXOSY, diff_BPXODI)
+
+# Fill Fasting Glucose missing values using mean value
+glus <- mean_fill(glus, "LBXGLU")
+
+# Relabel Response Variable 
+y$DIQ010 <- ifelse(y$DIQ010 == 1, 1, 0)
+```
+
+## 1.5 Double Check before Merging  
+
+```{r}
+# Check for duplication
+data_sets <- list(demos, diqs, mcqs, paqs, smqs, alqs, sugar, bmxs, bpxos, glus)
+names(data_sets) <- c("demos", "diqs", "mcqs", "paqs", "smqs", "alqs", "sugar", "bmxs", "bpxos", "glus")
+
+for (name in names(data_sets)) {
+  dataset <- data_sets[[name]]
+  duplicated_seqns <- dataset[duplicated(dataset$SEQN), "SEQN"]
+  if (length(duplicated_seqns) > 0) {
+    cat("Data set", name, "contains duplicated SEQN values:\n")
+    print(duplicated_seqns)
+  }
+}
+```
+
+## 1.6 Merging Data  
+
+```{r}
+# Merge full dataset
+merged_data <- demos %>%
+  inner_join(y, by = "SEQN") %>%
+  inner_join(diqs, by = "SEQN") %>%
+  inner_join(mcqs, by = "SEQN") %>%
+  inner_join(paqs, by = "SEQN") %>%
+  inner_join(smqs, by = "SEQN") %>%
+  inner_join(alqs, by = "SEQN") %>%
+  inner_join(sugar, by = "SEQN") %>%
+  inner_join(bmxs, by = "SEQN") %>%
+  inner_join(bpxos, by = "SEQN") %>%
+  inner_join(glus, by = "SEQN")
+
+head(merged_data)
+```
+
+## 1.7 Standardize Data  
+
+```{r}
+SEQNeric_columns <- c("RIDAGEYR", "INDFMPIR","PAQ655", "sugar", "BMXBMI", "diff_BPXOSY", "diff_BPXODI", "LBXGLU")
+SEQNeric_data <- merged_data[, SEQNeric_columns]
+
+scaled_data <- scale(SEQNeric_data)
+
+non_SEQNeric_columns <- setdiff(names(merged_data), SEQNeric_columns)
+non_SEQNeric_data <- merged_data[, non_SEQNeric_columns]
+dataset <- cbind(non_SEQNeric_data, as.data.frame(scaled_data))
+```
+
+## 1.8 Final Dataset
+```{r}
+full_dataset <- select(dataset, -SEQN)
+```
+
+# 2. EDA  
+
+## 2.1 Imbalanced Data  
+
+```{r}
+library(ggplot2)
+pie_prop <- table(full_dataset$DIQ010)/nrow(full_dataset)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Original Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+# 3. Data Processing  
+
+## 3.1 Data Split  
+```{r}
+set.seed(123)
+full_dataset$DIQ010 <- as.factor(full_dataset$DIQ010)
+training_index <- sample(nrow(full_dataset), nrow(full_dataset) * 0.8)
+training_data <- full_dataset[training_index, ]
+test_data <- full_dataset[-training_index, ]
+```
+
+## 3.2 SMOTE  
+```{r}
+library(smotefamily)
+library(dplyr)
+
+smt_training_dataframe = SMOTE(training_data[,-5], training_data[,5], K = 3, dup_size = 4)
+smt_training_data = smt_training_dataframe[[1]]
+smt_training_data <- smt_training_data %>% rename(DIQ010 = class)
+smt_training_data$DIQ010 <- factor(smt_training_data$DIQ010, levels = c("0", "1"), labels = c("0", "1"))
+head(smt_training_data)
+```
+
+```{r}
+library(ggplot2)
+pie_prop <- table(smt_training_data$DIQ010)/nrow(smt_training_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Data Using SMOTE")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+# 4. General Modeling Setup & Comparison   
+
+## 4.1 Logistic Model  
+```{r}
+# Logistic Model
+glmfit <- glm(DIQ010 ~ ., data = smt_training_data, family = "binomial")
+summary(glmfit)
+```
+
+### 4.1.1 Logistic Model Test Error  
+```{r}
+# Evaluation
+predicted_values <- predict(glmfit, newdata = test_data, type = "response")
+predicted_classes <- ifelse(predicted_values > 0.5, 1, 0)
+test_error_glmfit <- mean(predicted_classes != test_data$DIQ010)
+test_error_glmfit
+```
+
+### 4.1.2 Logistic Model Classification Report    
+```{r}
+# Classification report
+library(caret)
+library(pROC)
+library(ggplot2)
+
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(predicted_classes), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Calculate AUC
+roc_obj <- roc(test_data$DIQ010, predicted_values)
+auc <- auc(roc_obj)
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("AUC:", auc, "\n")
+```
+
+### 4.1.3 Logistic Model Feature Importance  
+```{r}
+coef_table <- summary(glmfit)$coefficients
+importance_glm <- data.frame(variable=row.names(coef_table), Pr=coef_table[, 4])
+importance_glm <- importance_glm[order(importance_glm$Pr, decreasing = FALSE), ]
+importance_glm
+```
+
+## 4.2 LDA   
+```{r}
+# lda
+library(MASS)
+lda <- lda(DIQ010 ~ ., data = smt_training_data)
+lda
+```
+
+### 4.2.1 LDA Test Error  
+```{r}
+# Evaluation
+predicted_classes <- predict(lda, test_data)$class
+test_error_lda <- mean(predicted_classes != test_data$DIQ010)
+test_error_lda
+```
+
+### 4.2.2 LDA Classification Report  
+```{r}
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(predicted_classes), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Calculate AUC
+roc_obj <- roc(test_data$DIQ010, predicted_values)
+auc <- auc(roc_obj)
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("AUC:", auc, "\n")
+```
+
+### 4.2.3 LDA Feature Importance  
+```{r}
+# Calculate Feature Importance
+coef_matrix <- coef(lda)
+importance <- abs(coef_matrix)
+
+# Standardize Feature Importance
+normalized_importance <- importance / sum(importance)
+
+# Rank
+importance_order <- order(-normalized_importance)
+
+# Column Name
+variable_names <- colnames(smt_training_data)
+variable_names <- variable_names[variable_names != "DIQ010"]
+
+# Print
+importance_df <- data.frame(
+  Feature = variable_names[importance_order],
+  Rank = 1:length(normalized_importance)
+)
+print(importance_df)
+```
+
+## 4.3 RandomForest  
+```{r}
+# RandomForest
+library(randomForest)
+rf_mod <- randomForest(
+  DIQ010 ~ .,
+  data=smt_training_data,
+  mtry=4,
+  ntree=1000,
+  importance=TRUE) 
+rf_mod
+```
+
+### 4.3.1 RamdomForest Test Error  
+```{r}
+test.pred<-predict(rf_mod,test_data,type="class")
+test.error.c=mean(test.pred != test_data$DIQ010)
+cat("Test error:", test.error.c, "\n")
+```
+
+### 4.3.2 RamdomForest Classification Report  
+```{r}
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(test.pred), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Calculate AUC
+roc_obj <- roc(test_data$DIQ010, predicted_values)
+auc <- auc(roc_obj)
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("AUC:", auc, "\n")
+```
+
+### 4.3.3 RandomForest Feature Importance  
+```{r}
+# Extract Feature Importance
+importance <- rf_mod$importance[, "MeanDecreaseGini"]
+
+# Rank
+importance_order <- order(-importance)
+
+# Column Name
+variable_names <- colnames(smt_training_data)
+variable_names <- variable_names[variable_names != "DIQ010"]
+
+# Print
+importance_df <- data.frame(
+  Feature = variable_names[importance_order],
+  Rank = 1:length(importance)
+)
+print(importance_df)
+```
+
+## 4.4 SVM  
+```{r}
+# Support Vector Machine
+library(e1071)
+set.seed(1)
+svm_tuned <- tune(
+  svm, DIQ010 ~ .,
+  data=smt_training_data,
+  kernel="linear", 
+  ranges=list(
+    cost=c(0.1, 0.9, 1, 1.1)))
+summary(svm_tuned)
+```
+
+### 4.4.1 SVM Tuning  
+```{r}
+bestmod <- svm_tuned$best.model
+summary(bestmod)
+```
+
+### 4.4.2 SVM Test Error  
+```{r}
+test.pred<-predict(bestmod,test_data,type="class")
+test.error.c=mean(test.pred != test_data$DIQ010)
+cat("Test error:", test.error.c, "\n")
+```
+
+### 4.4.3 SVM Classfication Report  
+```{r}
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(test.pred), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Calculate AUC
+roc_obj <- roc(test_data$DIQ010, predicted_values)
+auc <- auc(roc_obj)
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+cat("AUC:", auc, "\n")
+```
+
+### 4.4.4 SVM Feature Importance  
+```{r}
+# Extract SVM Weight
+svm_weights <- t(bestmod$coefs) %*% bestmod$SV
+
+# Calculate Feature Importamce
+importance <- abs(svm_weights)
+
+# Rank
+importance_order <- order(-importance)
+
+# Column Name
+variable_names <- colnames(smt_training_data)
+variable_names <- variable_names[variable_names != "DIQ010"]
+
+# Print
+importance_df <- data.frame(
+  Feature = variable_names[importance_order],
+  Rank = 1:length(importance)
+)
+print(importance_df)
+```
+
+
+## 4.5 Model Selection  
+We select the model by first looking at the recall score and then looking at F1 score.  
+Since we are dealing with the problem with imbalanced data in essence, we have to know how much the model can perform on the minor group which is the diabetes patient group.  
+Basically, we do this by comparing the recall score and for the 4 models we used above, their recall scores are almost same which are around 80%~84%.
+And then, since they can do the same number of job on minor group, we want to examine its precision of prediction which is implied by the precision score.  
+However, we have to be careful with the balance between precision and recall score.  
+Therefore, we use F1 score as our second criteria.  
+After comparison, we decide to use the RandomForest model as our main model to do the inference job later.  
+
+# 5. Modeling on Data Splitted by Different Race Using RandomForest
+
+## 5.1 Data Splitted by the Race Dimension  
+```{r}
+# Split Data by Race Dimension
+mexico_data <- full_dataset[full_dataset$RIDRETH3 == 1, ]
+hispanic_data <- full_dataset[full_dataset$RIDRETH3 == 2, ]
+white_data <- full_dataset[full_dataset$RIDRETH3 == 3, ]
+black_data <- full_dataset[full_dataset$RIDRETH3 == 4, ]
+asian_data <- full_dataset[full_dataset$RIDRETH3 == 6, ]
+```
+
+## 5.2 Modeling on Mexico America Data  
+
+### 5.2.1 Mexico Data Splitting  
+```{r}
+set.seed(123)
+mexico_data$DIQ010 <- as.factor(mexico_data$DIQ010)
+training_index <- sample(nrow(mexico_data), nrow(mexico_data) * 0.8)
+training_data <- mexico_data[training_index, ]
+test_data <- mexico_data[-training_index, ]
+```
+
+### 5.2.2 Mexico EDA  
+```{r}
+library(ggplot2)
+pie_prop <- table(mexico_data$DIQ010)/nrow(mexico_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Mexico America Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.2.3 Mexico SMOTE  
+```{r}
+library(smotefamily)
+library(dplyr)
+
+smt_training_dataframe = SMOTE(training_data[,-5], training_data[,5], K = 3, dup_size = 3)
+smt_training_data = smt_training_dataframe[[1]]
+smt_training_data <- smt_training_data %>% rename(DIQ010 = class)
+smt_training_data$DIQ010 <- factor(smt_training_data$DIQ010, levels = c("0", "1"), labels = c("0", "1"))
+head(smt_training_data)
+```
+
+```{r}
+library(ggplot2)
+pie_prop <- table(smt_training_data$DIQ010)/nrow(smt_training_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Mexico America Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.2.4 Mexico RandomForest  
+```{r}
+# RandomForest on Mexico
+library(randomForest)
+rf_mod <- randomForest(
+  DIQ010 ~ .,
+  data=smt_training_data,
+  mtry=4,
+  ntree=1000,
+  importance=TRUE) 
+rf_mod
+```
+
+### 5.2.4 Mexico Test Error  
+```{r}
+test.pred<-predict(rf_mod,test_data,type="class")
+test.error.c=mean(test.pred != test_data$DIQ010)
+cat("Test error:", test.error.c, "\n")
+```
+
+### 5.2.5 Mexico Classification Report  
+```{r}
+library(caret)
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(test.pred), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+```
+
+### 5.2.6 Mexico Feature Importance  
+
+```{r}
+library(ggplot2)
+
+# Extract feature importance
+importance <- rf_mod$importance[, "MeanDecreaseGini"]
+
+# Create data frame for plotting
+importance_df <- data.frame(Feature = rownames(rf_mod$importance), Importance = importance)
+
+# Create a horizontal bar chart
+ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Feature") +
+  ylab("Mean Decrease in Gini Index") +
+  ggtitle("Mexico America Feature Importance Ranking") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Order the importance values
+importance_order <- order(-importance)
+
+# Create a data frame with variable names and their corresponding importance values
+importance_ranked_df <- data.frame(
+  Feature = rownames(rf_mod$importance)[importance_order],
+  MeanDecreaseGini = importance[importance_order]
+)
+
+# Print the ranked importance data frame
+print(importance_ranked_df)
+```
+
+## 5.3 Modeling on Hispanic Data  
+
+### 5.3.1 Hispanic Data Splitting   
+```{r}
+set.seed(123)
+hispanic_data$DIQ010 <- as.factor(hispanic_data$DIQ010)
+training_index <- sample(nrow(hispanic_data), nrow(hispanic_data) * 0.8)
+training_data <- hispanic_data[training_index, ]
+test_data <- hispanic_data[-training_index, ]
+```
+
+### 5.3.2 Hispanic EDA  
+```{r}
+library(ggplot2)
+pie_prop <- table(hispanic_data$DIQ010)/nrow(hispanic_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Hispanic Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.3.3 Hispanic SMOTE    
+```{r}
+library(smotefamily)
+library(dplyr)
+
+smt_training_dataframe = SMOTE(training_data[,-5], training_data[,5], K = 3, dup_size = 3)
+smt_training_data = smt_training_dataframe[[1]]
+smt_training_data <- smt_training_data %>% rename(DIQ010 = class)
+smt_training_data$DIQ010 <- factor(smt_training_data$DIQ010, levels = c("0", "1"), labels = c("0", "1"))
+head(smt_training_data)
+```
+
+```{r}
+library(ggplot2)
+pie_prop <- table(smt_training_data$DIQ010)/nrow(smt_training_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Hispanic Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.3.4 Hispanic RamdomForest    
+```{r}
+# RandomForest on Hispanic
+library(randomForest)
+rf_mod <- randomForest(
+  DIQ010 ~ .,
+  data=smt_training_data,
+  mtry=4,
+  ntree=1000,
+  importance=TRUE) 
+rf_mod
+```
+
+### 5.3.5 Hispanic Test Error  
+```{r}
+test.pred<-predict(rf_mod,test_data,type="class")
+test.error.c=mean(test.pred != test_data$DIQ010)
+cat("Test error:", test.error.c, "\n")
+```
+
+### 5.3.6 Hispanic Classification Report    
+```{r}
+library(caret)
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(test.pred), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+```
+
+### 5.3.7 Hispanic Feature Importamce    
+
+```{r}
+library(ggplot2)
+
+# Extract feature importance
+importance <- rf_mod$importance[, "MeanDecreaseGini"]
+
+# Create data frame for plotting
+importance_df <- data.frame(Feature = rownames(rf_mod$importance), Importance = importance)
+
+# Create a horizontal bar chart
+ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Feature") +
+  ylab("Mean Decrease in Gini Index") +
+  ggtitle("Hispanic Feature Importance Ranking") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Order the importance values
+importance_order <- order(-importance)
+
+# Create a data frame with variable names and their corresponding importance values
+importance_ranked_df <- data.frame(
+  Feature = rownames(rf_mod$importance)[importance_order],
+  MeanDecreaseGini = importance[importance_order]
+)
+
+# Print the ranked importance data frame
+print(importance_ranked_df)
+```
+
+## 5.4 Modeling on White Data  
+
+### 5.4.1 White Data Splitting   
+```{r}
+set.seed(123)
+white_data$DIQ010 <- as.factor(white_data$DIQ010)
+training_index <- sample(nrow(white_data), nrow(white_data) * 0.8)
+training_data <- white_data[training_index, ]
+test_data <- white_data[-training_index, ]
+```
+  
+### 5.4.2 White EDA     
+```{r}
+library(ggplot2)
+pie_prop <- table(white_data$DIQ010)/nrow(white_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in White Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.4.3 White SMOTE       
+```{r}
+library(smotefamily)
+library(dplyr)
+
+smt_training_dataframe = SMOTE(training_data[,-5], training_data[,5], K = 3, dup_size = 4)
+smt_training_data = smt_training_dataframe[[1]]
+smt_training_data <- smt_training_data %>% rename(DIQ010 = class)
+smt_training_data$DIQ010 <- factor(smt_training_data$DIQ010, levels = c("0", "1"), labels = c("0", "1"))
+head(smt_training_data)
+```
+
+```{r}
+library(ggplot2)
+pie_prop <- table(smt_training_data$DIQ010)/nrow(smt_training_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in White Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.4.4 White RandomForest      
+```{r}
+# RandomForest on White
+library(randomForest)
+rf_mod <- randomForest(
+  DIQ010 ~ .,
+  data=smt_training_data,
+  mtry=4,
+  ntree=1000,
+  importance=TRUE) 
+rf_mod
+```
+
+### 5.4.5 White Test Error       
+```{r}
+test.pred<-predict(rf_mod,test_data,type="class")
+test.error.c=mean(test.pred != test_data$DIQ010)
+cat("Test error:", test.error.c, "\n")
+```
+
+### 5.4.6 White Classification Report       
+```{r}
+library(caret)
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(test.pred), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+```
+
+### 5.4.7 White Feature Importance       
+
+```{r}
+library(ggplot2)
+
+# Extract feature importance
+importance <- rf_mod$importance[, "MeanDecreaseGini"]
+
+# Create data frame for plotting
+importance_df <- data.frame(Feature = rownames(rf_mod$importance), Importance = importance)
+
+# Create a horizontal bar chart
+ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Feature") +
+  ylab("Mean Decrease in Gini Index") +
+  ggtitle("White Feature Importance Ranking") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Order the importance values
+importance_order <- order(-importance)
+
+# Create a data frame with variable names and their corresponding importance values
+importance_ranked_df <- data.frame(
+  Feature = rownames(rf_mod$importance)[importance_order],
+  MeanDecreaseGini = importance[importance_order]
+)
+
+# Print the ranked importance data frame
+print(importance_ranked_df)
+```
+
+## 5.5 Modeling on Black Data  
+
+### 5.5.1 Black Data Splitting   
+```{r}
+set.seed(123)
+black_data$DIQ010 <- as.factor(black_data$DIQ010)
+training_index <- sample(nrow(black_data), nrow(black_data) * 0.8)
+training_data <- black_data[training_index, ]
+test_data <- black_data[-training_index, ]
+```
+
+### 5.5.2 Black EDA     
+```{r}
+library(ggplot2)
+pie_prop <- table(black_data$DIQ010)/nrow(black_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Black Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.5.3 Black SMOTE       
+```{r}
+library(smotefamily)
+library(dplyr)
+
+smt_training_dataframe = SMOTE(training_data[,-5], training_data[,5], K = 3, dup_size = 3)
+smt_training_data = smt_training_dataframe[[1]]
+smt_training_data <- smt_training_data %>% rename(DIQ010 = class)
+smt_training_data$DIQ010 <- factor(smt_training_data$DIQ010, levels = c("0", "1"), labels = c("0", "1"))
+head(smt_training_data)
+```
+
+```{r}
+library(ggplot2)
+pie_prop <- table(smt_training_data$DIQ010)/nrow(smt_training_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Black Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.5.4 Black RandomForest       
+```{r}
+# RandomForest on Black
+library(randomForest)
+rf_mod <- randomForest(
+  DIQ010 ~ .,
+  data=smt_training_data,
+  mtry=4,
+  ntree=1000,
+  importance=TRUE) 
+rf_mod
+```
+
+### 5.5.5 Black Test Error       
+```{r}
+test.pred<-predict(rf_mod,test_data,type="class")
+test.error.c=mean(test.pred != test_data$DIQ010)
+cat("Test error:", test.error.c, "\n")
+```
+
+### 5.5.6 Black Classification Report       
+```{r}
+library(caret)
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(test.pred), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+```
+
+### 5.5.7 Black Feature Importance      
+
+```{r}
+library(ggplot2)
+
+# Extract feature importance
+importance <- rf_mod$importance[, "MeanDecreaseGini"]
+
+# Create data frame for plotting
+importance_df <- data.frame(Feature = rownames(rf_mod$importance), Importance = importance)
+
+# Create a horizontal bar chart
+ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Feature") +
+  ylab("Mean Decrease in Gini Index") +
+  ggtitle("Black Feature Importance Ranking") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Order the importance values
+importance_order <- order(-importance)
+
+# Create a data frame with variable names and their corresponding importance values
+importance_ranked_df <- data.frame(
+  Feature = rownames(rf_mod$importance)[importance_order],
+  MeanDecreaseGini = importance[importance_order]
+)
+
+# Print the ranked importance data frame
+print(importance_ranked_df)
+```
+
+## 5.6 Modeling on Asian Data  
+
+### 5.6.1 Asian Data Splitting   
+```{r}
+set.seed(123)
+asian_data$DIQ010 <- as.factor(asian_data$DIQ010)
+training_index <- sample(nrow(asian_data), nrow(asian_data) * 0.8)
+training_data <- asian_data[training_index, ]
+test_data <- asian_data[-training_index, ]
+```
+
+### 5.6.2 Asian EDA    
+```{r}
+library(ggplot2)
+pie_prop <- table(asian_data$DIQ010)/nrow(asian_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Asian Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.6.3 Asian SMOTE     
+```{r}
+library(smotefamily)
+library(dplyr)
+
+smt_training_dataframe = SMOTE(training_data[,-5], training_data[,5], K = 3, dup_size = 4)
+smt_training_data = smt_training_dataframe[[1]]
+smt_training_data <- smt_training_data %>% rename(DIQ010 = class)
+smt_training_data$DIQ010 <- factor(smt_training_data$DIQ010, levels = c("0", "1"), labels = c("0", "1"))
+head(smt_training_data)
+```
+
+```{r}
+library(ggplot2)
+pie_prop <- table(smt_training_data$DIQ010)/nrow(smt_training_data)
+labels <- paste0(sprintf("%.1f", round(pie_prop * 100, 1)), "%")
+colors <- ifelse(labels == "50.0%", c("white", "gray50"), c("red", "blue"))
+pie(pie_prop, labels = labels, col = colors, main = "Proportion of Diabetes in Asian Data")
+legend("topright", c("No Diabete", "Diabete"), fill = colors)
+```
+
+### 5.6.4 Asian RandomForest     
+```{r}
+# RandomForest on Asian
+library(randomForest)
+rf_mod <- randomForest(
+  DIQ010 ~ .,
+  data=smt_training_data,
+  mtry=4,
+  ntree=1000,
+  importance=TRUE) 
+rf_mod
+```
+
+### 5.6.5 Asian Test Error     
+```{r}
+test.pred<-predict(rf_mod,test_data,type="class")
+test.error.c=mean(test.pred != test_data$DIQ010)
+cat("Test error:", test.error.c, "\n")
+```
+
+### 5.6.6 Asian Classification Report     
+```{r}
+library(caret)
+# Calculate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(test.pred), as.factor(test_data$DIQ010), positive = "1")
+
+# Calculate precision, recall, and F1 score
+precision <- conf_matrix$byClass["Pos Pred Value"]
+recall <- conf_matrix$byClass["Sensitivity"]
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+
+# Print classification report
+cat("Precision:", precision, "\n")
+cat("Recall:", recall, "\n")
+cat("F1 Score:", f1_score, "\n")
+```
+
+### 5.6.7 Asian Feature Importamce     
+```{r}
+library(ggplot2)
+
+# Extract feature importance
+importance <- rf_mod$importance[, "MeanDecreaseGini"]
+
+# Create data frame for plotting
+importance_df <- data.frame(Feature = rownames(rf_mod$importance), Importance = importance)
+
+# Create a horizontal bar chart
+ggplot(importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  xlab("Feature") +
+  ylab("Mean Decrease in Gini Index") +
+  ggtitle("Asian Feature Importance Ranking") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+# Order the importance values
+importance_order <- order(-importance)
+
+# Create a data frame with variable names and their corresponding importance values
+importance_ranked_df <- data.frame(
+  Feature = rownames(rf_mod$importance)[importance_order],
+  MeanDecreaseGini = importance[importance_order]
+)
+
+# Print the ranked importance data frame
+print(importance_ranked_df)
+```
+
+# 6. Final EDA  
+
+## 6.1 EDA on Mexico American Data 
+
+### 6.1.1 Mexico American: Age  
+```{r}
+library(ggplot2)
+library(dplyr)
+
+mexico_data_unscaled <- subset(merged_data, RIDRETH3 == 1)
+mexico_diabetes_data <- subset(mexico_data_unscaled, DIQ010 %in% c(0, 1))
+
+# Boxplot
+ggplot(mexico_data_unscaled, aes(x = as.factor(DIQ010), y = RIDAGEYR, fill = factor(DIQ010, labels = c("No", "Yes")))) +
+  geom_boxplot() +
+  labs(x = "Diabetes Status", y = "Age",
+       title = "Mexico American: Age",
+       fill = "Diabetes Status") +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 6.1.2 Mexico American: Close relatives have diabetes  
+```{r}
+library(ggplot2)
+
+mexico_diabetes <- subset(mexico_data, DIQ010 == 1)
+
+family_diabetes <- table(mexico_data$MCQ300C)
+family_diabetes <- data.frame(Label = c("Yes", "No"), Count = c(family_diabetes[1], family_diabetes[2]))
+family_diabetes$Percentage <- family_diabetes$Count / sum(family_diabetes$Count) * 100
+
+ggplot(family_diabetes, aes(x = "", y = Percentage, fill = Label)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() + theme(plot.title = element_text(hjust = 0.5)) +
+  geom_label(aes(label = paste0(round(Percentage, 1), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Mexico American Diabetes Patients: Close relatives have diabetes")
+```
+
+## 6.2 EDA on Hispanic Data 
+
+### 6.2.1 Hispanic: Age  
+```{r}
+library(ggplot2)
+library(dplyr)
+
+hispanic_data_unscaled <- subset(merged_data, RIDRETH3 == 2)
+hispanic_diabetes_data <- subset(hispanic_data_unscaled, DIQ010 %in% c(0, 1))
+
+# Boxplot
+ggplot(hispanic_data_unscaled, aes(x = as.factor(DIQ010), y = RIDAGEYR, fill = factor(DIQ010, labels = c("No", "Yes")))) +
+  geom_boxplot() +
+  labs(x = "Diabetes Status", y = "Age",
+       title = "Hispanic: Age",
+       fill = "Diabetes Status") +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 6.2.2 Hispanic: BMI  
+```{r}
+library(ggplot2)
+library(dplyr)
+
+hispanic_data_unscaled <- subset(merged_data, RIDRETH3 == 2)
+hispanic_diabetes_data <- subset(hispanic_data_unscaled, DIQ010 %in% c(0, 1))
+
+# Boxplot
+ggplot(hispanic_data_unscaled, aes(x = as.factor(DIQ010), y = BMXBMI, fill = factor(DIQ010, labels = c("No", "Yes")))) +
+  geom_boxplot() +
+  labs(x = "Diabetes Status", y = "BMI",
+       title = "Hispanic: BMI",
+       fill = "Diabetes Status") +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 6.2.3 Hispanic: Close relatives have diabetes  
+```{r}
+library(ggplot2)
+
+hispanic_diabetes <- subset(hispanic_data, DIQ010 == 2)
+
+family_diabetes <- table(hispanic_data$MCQ300C)
+family_diabetes <- data.frame(Label = c("Yes", "No"), Count = c(family_diabetes[1], family_diabetes[2]))
+family_diabetes$Percentage <- family_diabetes$Count / sum(family_diabetes$Count) * 100
+
+ggplot(family_diabetes, aes(x = "", y = Percentage, fill = Label)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() + theme(plot.title = element_text(hjust = 0.5)) +
+  geom_label(aes(label = paste0(round(Percentage, 1), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Hispanic Diabetes Patients: Close relatives have diabetes")
+```
+
+### 6.2.4 Hispanic: Education Level     
+```{r}
+diabetes_data <- subset(hispanic_data, DIQ010 %in% c(0, 1))
+
+diabetes_data$DMDEDUC2 <- factor(diabetes_data$DMDEDUC2,
+                                  levels = c(1, 2, 3, 4, 5),
+                                  labels = c("<9th Grade", "9-11th Grade", "High school/GED", "AA Degree", ">College Graduate"))
+
+# Distribution of Education Level
+diabetes_education_data <- diabetes_data %>%
+  group_by(DIQ010, DMDEDUC2) %>%
+  summarise(Count = n()) %>%
+  mutate(DiabetesStatus = ifelse(DIQ010 == 0, "No", "Yes"))
+
+ggplot(diabetes_education_data, aes(x = DMDEDUC2, y = Count, fill = DiabetesStatus)) +
+  geom_col(position = "dodge") +
+  geom_smooth(aes(group = DiabetesStatus, colour = DiabetesStatus), method = "loess", se = FALSE) +
+  labs(x = "Education Level", y = "Number of Records",
+       title = "Hispanic: Education Level",
+       fill = "Diabetes Status", colour = "Diabetes Status") +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+## 6.3 EDA on White Data 
+
+### 6.3.1 White: Close relatives have diabetes  
+```{r}
+library(ggplot2)
+
+white_diabetes <- subset(white_data, DIQ010 == 3)
+
+family_diabetes <- table(white_data$MCQ300C)
+family_diabetes <- data.frame(Label = c("Yes", "No"), Count = c(family_diabetes[1], family_diabetes[2]))
+family_diabetes$Percentage <- family_diabetes$Count / sum(family_diabetes$Count) * 100
+
+ggplot(family_diabetes, aes(x = "", y = Percentage, fill = Label)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() + theme(plot.title = element_text(hjust = 0.5)) +
+  geom_label(aes(label = paste0(round(Percentage, 1), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "White Diabetes Patients: Close relatives have diabetes")
+```
+
+### 6.3.2 White: Age  
+```{r}
+library(ggplot2)
+library(dplyr)
+
+white_data_unscaled <- subset(merged_data, RIDRETH3 == 3)
+white_diabetes_data <- subset(white_data_unscaled, DIQ010 %in% c(0, 1))
+
+# Boxplot
+ggplot(white_data_unscaled, aes(x = as.factor(DIQ010), y = RIDAGEYR, fill = factor(DIQ010, labels = c("No", "Yes")))) +
+  geom_boxplot() +
+  labs(x = "Diabetes Status", y = "Age",
+       title = "Hispanic: Age",
+       fill = "Diabetes Status") +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 6.3.3 White: BMI  
+```{r}
+library(ggplot2)
+library(dplyr)
+
+white_data_unscaled <- subset(merged_data, RIDRETH3 == 3)
+white_data_unscaled <- subset(white_data_unscaled, DIQ010 %in% c(0, 1))
+
+# Boxplot
+ggplot(white_data_unscaled, aes(x = as.factor(DIQ010), y = BMXBMI, fill = factor(DIQ010, labels = c("No", "Yes")))) +
+  geom_boxplot() +
+  labs(x = "Diabetes Status", y = "BMI",
+       title = "White: BMI",
+       fill = "Diabetes Status") +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 6.3.4 White: Gender  
+```{r}
+gender_data <- table(white_data$RIDAGEYR)
+gender_data <- data.frame(Label = c("Male", "Female"), Count = c(gender_data[1], gender_data[2]))
+gender_data$Percentage <- gender_data$Count / sum(gender_data$Count) * 100
+
+ggplot(gender_data, aes(x = "", y = Percentage, fill = Label)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() + theme(plot.title = element_text(hjust = 0.5)) +
+  geom_label(aes(label = paste0(round(Percentage, 1), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "White Diabetes Patients: Gender")
+```
+
+
+## 6.4 EDA on Black Data 
+
+### 6.4.1 Black: Age  
+```{r}
+library(ggplot2)
+library(dplyr)
+
+black_data_unscaled <- subset(merged_data, RIDRETH3 == 4)
+black_diabetes_data <- subset(black_data_unscaled, DIQ010 %in% c(0, 1))
+
+# Boxplot
+ggplot(black_data_unscaled, aes(x = as.factor(DIQ010), y = RIDAGEYR, fill = factor(DIQ010, labels = c("No", "Yes")))) +
+  geom_boxplot() +
+  labs(x = "Diabetes Status", y = "Age",
+       title = "Black: Age",
+       fill = "Diabetes Status") +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+### 6.4.2 Black: Close relatives have diabetes  
+```{r}
+library(ggplot2)
+
+black_diabetes <- subset(black_data, DIQ010 == 4)
+
+family_diabetes <- table(black_data$MCQ300C)
+family_diabetes <- data.frame(Label = c("Yes", "No"), Count = c(family_diabetes[1], family_diabetes[2]))
+family_diabetes$Percentage <- family_diabetes$Count / sum(family_diabetes$Count) * 100
+
+ggplot(family_diabetes, aes(x = "", y = Percentage, fill = Label)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  theme_void() + theme(plot.title = element_text(hjust = 0.5)) +
+  geom_label(aes(label = paste0(round(Percentage, 1), "%")), position = position_stack(vjust = 0.5)) +
+  labs(title = "Black Diabetes Patients: Close relatives have diabetes")
+```
+
+## 6.5 EDA on Asian Data 
+
+### 6.5.1 Asian: Age
+```{r}
+library(ggplot2)
+library(dplyr)
+
+asian_data_unscaled <- subset(merged_data, RIDRETH3 == 6)
+asian_diabetes_data <- subset(asian_data_unscaled, DIQ010 %in% c(0, 1))
+
+# Boxplot
+ggplot(asian_data_unscaled, aes(x = as.factor(DIQ010), y = RIDAGEYR, fill = factor(DIQ010, labels = c("No", "Yes")))) +
+  geom_boxplot() +
+  labs(x = "Diabetes Status", y = "Age",
+       title = "Asian: Age",
+       fill = "Diabetes Status") +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
